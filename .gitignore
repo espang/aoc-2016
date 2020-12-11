@@ -1,0 +1,10 @@
+obj
+.ionide
+*.txt
+
+.fake
+.ionide
+
+.calva
+.nrepl-port
+.cpcache
