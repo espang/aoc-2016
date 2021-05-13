@@ -8,3 +8,5 @@ obj
 .calva
 .nrepl-port
 .cpcache
+
+.idea
