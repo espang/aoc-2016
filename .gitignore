@@ -10,3 +10,5 @@ obj
 .cpcache
 
 .idea
+.lsp/
+zig-cache/
