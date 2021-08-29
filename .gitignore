@@ -12,3 +12,4 @@ obj
 .idea
 .lsp/
 zig-cache/
+.socket-repl-port
