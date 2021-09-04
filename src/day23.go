@@ -7,75 +7,108 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
 )
 
+type Operation int
+
+const (
+	Increase Operation = iota
+	Decrease
+	Toggle
+	Copy
+	Jump
+)
+
+func OpFromString(s string) Operation {
+	switch s {
+	case "inc":
+		return Increase
+	case "dec":
+		return Decrease
+	case "tgl":
+		return Toggle
+	case "cpy":
+		return Copy
+	case "jnz":
+		return Jump
+	}
+	panic("OpFromString(" + s + ")")
+}
+
 type Register struct {
-	a, b, c, d int
+	vs [4]int
 }
 
 func (r Register) get(pos byte) int {
-	switch pos {
-	case 0:
-		return r.a
-	case 1:
-		return r.b
-	case 2:
-		return r.c
-	case 3:
-		return r.d
-	}
-	panic("unexpected string")
+	return r.vs[pos]
 }
-func (r *Register) applyIfPossible(pos byte, f func(int) int) {
-	switch pos {
-	case 0:
-		r.a = f(r.a)
-	case 1:
-		r.b = f(r.b)
-	case 2:
-		r.c = f(r.c)
-	case 3:
-		r.d = f(r.d)
-	}
+
+func (r *Register) set(pos byte, val int) {
+	r.vs[pos] = val
+}
+
+func (r *Register) inc(pos byte) {
+	r.vs[pos]++
+}
+
+func (r *Register) dec(pos byte) {
+	r.vs[pos]--
 }
 
 // ValueOrLocation has exactly one field set!
 type ValueOrLocation struct {
-	Location *byte
-	Value    *int
+	IsLocation bool
+	Location   byte
+	Value      int
+}
+
+func FromString(s string) ValueOrLocation {
+	switch s {
+	case "a":
+		return ValueOrLocation{Location: 0, IsLocation: true}
+	case "b":
+		return ValueOrLocation{Location: 1, IsLocation: true}
+	case "c":
+		return ValueOrLocation{Location: 2, IsLocation: true}
+	case "d":
+		return ValueOrLocation{Location: 3, IsLocation: true}
+	default:
+		v, err := strconv.Atoi(s)
+		if err != nil {
+			panic("FromString(" + s + "):" + err.Error())
+		}
+		return ValueOrLocation{
+			Value: v,
+		}
+	}
 }
 
 type Expr struct {
-	operation string
+	operation Operation
 	x, y      ValueOrLocation
 }
 
 func parseLine(line string) (*Expr, error) {
 	splitted := strings.Split(line, " ")
 	if len(splitted) == 2 {
-		return &Expr{operation: splitted[0], x: splitted[1]}, nil
+		return &Expr{
+			operation: OpFromString(splitted[0]),
+			x:         FromString(splitted[1]),
+		}, nil
 	}
 	if len(splitted) == 3 {
-		return &Expr{operation: splitted[0], x: splitted[1], y: splitted[2]}, nil
+		return &Expr{
+			operation: OpFromString(splitted[0]),
+			x:         FromString(splitted[1]),
+			y:         FromString(splitted[2]),
+		}, nil
 	}
 	return nil, errors.New("unexpected line format")
-}
-
-func valueOf(s string, r Register) int {
-	switch s {
-	case "a", "b", "c", "d":
-		return r.get(s)
-	default:
-		v, err := strconv.Atoi(s)
-		if err != nil {
-			panic("valueOf(" + s + "):" + err.Error())
-		}
-		return v
-	}
 }
 
 func inc(x int) int { return x + 1 }
@@ -83,33 +116,48 @@ func dec(x int) int { return x - 1 }
 
 func execute(e *Expr, r *Register, i int, exprs []*Expr) int {
 	switch e.operation {
-	case "inc":
-		r.applyIfPossible(e.x, inc)
+	case Increase:
+		// if e.x.IsLocation {
+		// 	r.inc(e.x.Location)
+		// }
+		r.inc(e.x.Location)
 		return i + 1
-	case "dec":
-		r.applyIfPossible(e.x, dec)
+	case Decrease:
+		// if e.x.IsLocation {
+		// 	r.dec(e.x.Location)
+		// }
+		r.dec(e.x.Location)
 		return i + 1
-	case "tgl":
-		idx := i + valueOf(e.x, *r)
-		if idx >= 0 && idx < len(exprs) {
+	case Toggle:
+		// idx := i + valueOf(e.x, *r)
+		idx := i + r.get(e.x.Location)
+		if idx < len(exprs) {
 			switch exprs[idx].operation {
-			case "inc":
-				exprs[idx].operation = "dec"
-			case "dec", "tgl":
-				exprs[idx].operation = "inc"
-			case "cpy":
-				exprs[idx].operation = "jnz"
-			case "jnz":
-				exprs[idx].operation = "cpy"
+			case Increase:
+				exprs[idx].operation = Decrease
+			case Decrease, Toggle:
+				exprs[idx].operation = Increase
+			case Copy:
+				exprs[idx].operation = Jump
+			case Jump:
+				exprs[idx].operation = Copy
 			}
 		}
 		return i + 1
-	case "cpy":
-		v := valueOf(e.x, *r)
-		r.applyIfPossible(e.y, func(int) int { return v })
+	case Copy:
+		if e.y.IsLocation {
+			v := e.x.Value
+			if e.x.IsLocation {
+				v = r.get(e.x.Location)
+			}
+			r.set(e.y.Location, v)
+		}
 		return i + 1
-	case "jnz":
-		v := valueOf(e.x, *r)
+	case Jump:
+		v := e.x.Value
+		if e.x.IsLocation {
+			v = r.get(e.x.Location)
+		}
 		if v != 0 {
 			return i + valueOf(e.y, *r)
 		}
@@ -119,23 +167,15 @@ func execute(e *Expr, r *Register, i int, exprs []*Expr) int {
 	panic("execute")
 }
 
-func step(r *Register, i int, exprs []*Expr) (int, bool) {
-	if i >= 0 && i < len(exprs) {
-		i = execute(exprs[i], r, i, exprs)
-		return i, true
-	}
-	return 0, false
-}
-
 func solve(a int, exprs []*Expr) int {
-	r := &Register{a, 0, 0, 0}
-	next := true
+	r := &Register{[4]int{a, 0, 0, 0}}
 	index := 0
-	for next {
-		index, next = step(r, index, exprs)
+	maxIndex := len(exprs)
+	for index < maxIndex {
+		index = execute(exprs[index], r, index, exprs)
 		//printexprs(index, exprs)
 	}
-	return r.a
+	return r.get(0)
 }
 
 func printexprs(i int, exprs []interface{}) {
@@ -148,6 +188,7 @@ func printexprs(i int, exprs []interface{}) {
 
 func main() {
 	var cpuprofile = flag.String("cpuprofile", "", "write cpu profile to `file`")
+	var memprofile = flag.String("memprofile", "", "write mem profile to `file`")
 	flag.Parse()
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
@@ -187,4 +228,16 @@ func main() {
 
 	fmt.Printf("took %v to solve it. Result is: %d", time.Since(start), solution)
 	fmt.Println("")
+
+	if *memprofile != "" {
+		f, err := os.Create(*memprofile)
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		runtime.GC()    // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+	}
 }
