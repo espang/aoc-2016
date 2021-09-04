@@ -1,5 +1,7 @@
 (ns day23)
 
+(set! *warn-on-reflection* true)
+
 (def register
   {\a 0
    \b 0
