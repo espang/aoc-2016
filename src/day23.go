@@ -60,7 +60,13 @@ func (r *Register) dec(pos byte) {
 	r.vs[pos]--
 }
 
-// ValueOrLocation has exactly one field set!
+func valueOf(vol ValueOrLocation, r Register) int {
+	if vol.IsLocation {
+		return r.get(vol.Location)
+	}
+	return vol.Value
+}
+
 type ValueOrLocation struct {
 	IsLocation bool
 	Location   byte
